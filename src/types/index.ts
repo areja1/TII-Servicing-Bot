@@ -19,8 +19,9 @@ export interface RetrievedPassage extends DocumentChunk {
   rank: number;
 }
 
-/** Shape of the context handed to the language model for grounding. */
-export interface RetrievalContext {
+/** Result of loading document passages for one chat turn. */
+export interface RetrievalResult {
   passages: RetrievedPassage[];
-  query: string;
+  /** Human-readable description of what was loaded (for the system prompt). */
+  scope: string;
 }

@@ -59,12 +59,13 @@ logs
 .vercel
 
 # ---------------------------------------------------------------------------
-# Editor / OS
+# Editor / OS / IDE
 # ---------------------------------------------------------------------------
 .vscode/*
 !.vscode/extensions.json
 !.vscode/settings.json
 .idea
+.cursor/
 .DS_Store
 Thumbs.db
 *.swp
@@ -82,9 +83,10 @@ Thumbs.db
 /docs/source-documents/*.pdf
 
 # ---------------------------------------------------------------------------
-# Generated test output (re-run with: node scripts/test/run-suite.mjs)
+# Generated test reports (re-run scripts in scripts/test/)
 # ---------------------------------------------------------------------------
 /scripts/test/results.md
+/scripts/test/*-results.md
 
 # ---------------------------------------------------------------------------
 # Scratch / temporary files (debug output, scratch notes)

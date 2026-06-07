@@ -53,6 +53,70 @@ const PINNED: PinnedPassage[] = [
     content:
       "Traveling Companion means a person or persons whose name(s) appear(s) with Yours on the same Travel Arrangements and who, during Your Trip, will accompany You. A group or tour organizer, sponsor or leader is not a Traveling Companion as defined, unless sharing accommodations in the same room, cabin, condominium unit, apartment unit or other lodging with You.",
   },
+  {
+    id: "pinned-assistance-overview",
+    section: "Worldwide Non-Insurance Assistance Services (p.4)",
+    content: [
+      "WORLDWIDE NON-INSURANCE ASSISTANCE SERVICES",
+      "The Travel Assistance feature provides a variety of travel related services.",
+      "Services offered include:",
+      "• Medical or Legal Referral • Inoculation Information • Hospital Admission Guarantee",
+      "• Telemedicine • House Calls • Translation Service • Lost Baggage Retrieval • Passport/Visa Information • Emergency Cash Advance • Bail Bond • Prescription Drug/Eyeglass Replacement • ID Theft Resolution Service • Concierge Service • Business Concierge",
+      "",
+      "24/7 Worldwide Non-Insurance Assistance Services",
+      "Travel Assistance, Medical Emergency, Concierge Service, Business Concierge, and ID Theft Resolution Service",
+      "FOR EMERGENCY ASSISTANCE DURING YOUR TRIP CALL: 800-494-9907 (From US/Canada) OR CALL COLLECT: 603-328-1707 (From all other locations)",
+      "",
+      "Travel assistance non-insurance services are provided by an independent organization and not by United States Fire Insurance Company or Travel Insured International. There may be times when circumstances beyond the Assistance Company's control hinder their endeavors to provide travel assistance services. They will, however, make all reasonable efforts to provide travel assistance services and help You resolve Your emergency situation.",
+    ].join("\n"),
+  },
+  {
+    id: "pinned-assistance-availability",
+    section: "Worldwide Non-Insurance Assistance Services › Availability",
+    content: [
+      "AVAILABILITY OF SERVICES",
+      "You are eligible for information and concierge services at any time after You purchase this plan.",
+      "The Emergency Assistance Services become available when You actually start Your Covered Trip.",
+      "Emergency Assistance, Concierge and Informational Services end the earliest of: midnight on the day the program expires; when You reach Your return destination; or when You complete Your Covered Trip.",
+      "The Identity Theft Resolution Services become available on Your scheduled departure date for Your Covered Trip. Services are provided only for an Identity Theft event which occurs while on Your Covered Trip.",
+    ].join("\n"),
+  },
+  {
+    id: "pinned-concierge-services",
+    section: "Worldwide Non-Insurance Assistance Services › Concierge Services",
+    content: [
+      "CONCIERGE SERVICES",
+      "Concierge Services are provided by Travel Insured's designated provider. There is no charge for the services provided by the provider. You are responsible for the cost of services provided and charged for by third parties and for the actual cost of merchandise, entertainment, sports, tickets, food and beverages and other disbursement items.",
+      "Services offered include:",
+      "• Destination Profiles • Epicurean Needs • Event Ticketing • Floral Services • Tee Time Reservations • Hotel Accommodations • Meet-And-Greet Services • Shopping Assistance Services • Pre-Trip Assistance • Procurement of Hard-To-Find Items • Restaurant Referrals and Reservations • Rental Car Reservations • Airline Reservations",
+    ].join("\n"),
+  },
+  {
+    id: "pinned-business-concierge",
+    section: "Worldwide Non-Insurance Assistance Services › Business Concierge Services",
+    content: [
+      "BUSINESS CONCIERGE SERVICES",
+      "Concierge Services are provided by Travel Insured's designated provider. There is no charge for the services provided by the provider. You are responsible for the cost of services provided and charged for by third parties.",
+      "Services offered include:",
+      "• Emergency Correspondence And Business Communication Assistance",
+      "• Assistance With Locating Available Business Services Such As: Express/Overnight Delivery Sites, Internet Cafes, Print/Copy Services",
+      "• Assistance With Or Arrangements For Telephone And Web Conferencing",
+      "• Emergency Messaging To Customers, Associates, And Others (Phone, Fax, E-mail, Text, etc.)",
+      "• Real Time Weather, Travel Delay And Flight Status Information",
+      "• Worldwide Business Directory Service For Equipment Repair/Replacement, Warranty Service, etc.",
+      "• Emergency Travel Arrangements",
+    ].join("\n"),
+  },
+  {
+    id: "pinned-identity-theft-resolution",
+    section: "Worldwide Non-Insurance Assistance Services › Identity Theft Resolution",
+    content: [
+      "IDENTITY THEFT RESOLUTION SERVICES",
+      "In the event of an Identity Theft event while on Your Covered Trip, Travel Insured's designated provider will provide you with the support and tools needed for You to restore Your identity.",
+      "Assistance includes contacting Your creditors to notify them of the event and to request replacement cards; connecting you with a friend or family member at home and providing them with the assistance to set up a transfer or wire of funds; information on how to contact the three major credit bureaus; guidance on how to obtain a police report; and providing You with a guide on how to restore Your credit.",
+      "Identity Theft Resolution does not guarantee a particular outcome. Identity Theft Resolution does not include and shall not assist You for thefts involving non-US bank accounts.",
+    ].join("\n"),
+  },
 ];
 
 /** Pinned passages shaped as retrieval results (tagged to the Plan Document). */

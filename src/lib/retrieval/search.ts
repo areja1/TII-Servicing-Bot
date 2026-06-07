@@ -1,63 +1,87 @@
 import { getSupabaseServerClient } from "@/lib/supabase/server";
-import { SOURCE } from "@/config/tii";
-import { PINNED_PASSAGES } from "@/config/plan-reference";
-import type { RetrievedPassage } from "@/types";
+import { SOURCE, SOURCE_LABELS } from "@/config/tii";
+import type { RetrievalResult, RetrievedPassage } from "@/types";
 
-const DEFAULT_TOP_K = Number(process.env.RETRIEVAL_TOP_K ?? 10);
+function parsePageNumber(query: string): number | null {
+  const match = query.match(/\bpage\s*(\d+)\b/i);
+  return match ? parseInt(match[1], 10) : null;
+}
+
+function parsePageSourceFilter(
+  query: string,
+): typeof SOURCE.CONFIRMATION_OF_BENEFITS | typeof SOURCE.PLAN_DOCUMENT | null {
+  if (/\bconfirmation of benefits\b|\bcob\b/i.test(query)) {
+    return SOURCE.CONFIRMATION_OF_BENEFITS;
+  }
+  if (/\bplan document\b|\bflexipax\b|\bmy plan document\b/i.test(query)) {
+    return SOURCE.PLAN_DOCUMENT;
+  }
+  return null;
+}
 
 /**
- * Retrieve the most relevant passages for a question using PostgreSQL
- * full-text search (see supabase/migrations for the `match_chunks` function).
- *
- * The Confirmation of Benefits holds the traveler's plan-specific facts
- * (plan number, dates, destination, purchased options), so we ALWAYS include
- * its key passages regardless of the text-search score. This guarantees the
- * bot can answer "what plan do I have?" style questions reliably.
+ * Loads the complete text of both plan documents on every request so the
+ * assistant has knowledge of all pages. Page-specific questions are handled
+ * via turn instructions that point the model at the labeled (p.N) passages.
  */
-export async function retrievePassages(
-  query: string,
-  topK: number = DEFAULT_TOP_K,
-): Promise<RetrievedPassage[]> {
+export async function retrievePassages(_userQuery: string): Promise<RetrievalResult> {
   const supabase = getSupabaseServerClient();
 
-  // 1. Full-text search across all chunks.
-  const { data: matches, error } = await supabase.rpc("match_chunks", {
-    query_text: query,
-    match_count: topK,
-  });
-  if (error) {
-    throw new Error(`Retrieval failed: ${error.message}`);
-  }
-
-  // 2. Always pull the Confirmation of Benefits chunks so plan-specific
-  //    facts are never missed.
   const { data: cob, error: cobError } = await supabase
     .from("document_chunks")
     .select("*")
-    .eq("source", SOURCE.CONFIRMATION_OF_BENEFITS);
+    .eq("source", SOURCE.CONFIRMATION_OF_BENEFITS)
+    .order("page", { ascending: true })
+    .order("created_at", { ascending: true });
   if (cobError) {
     throw new Error(`Failed to load Confirmation of Benefits: ${cobError.message}`);
   }
 
-  // 3. Merge, de-duplicate by id, keep highest rank.
-  const byId = new Map<string, RetrievedPassage>();
-  for (const row of (matches ?? []) as RetrievedPassage[]) {
-    byId.set(row.id, row);
-  }
-  for (const row of cob ?? []) {
-    if (!byId.has(row.id)) {
-      byId.set(row.id, { ...(row as RetrievedPassage), rank: 0 });
-    }
-  }
-
-  // 4. Always include curated Plan Document sub-limits and key definitions
-  //    that full-text search frequently misses (dental, per-article,
-  //    passport, credit card, traveling companion).
-  for (const pinned of PINNED_PASSAGES) {
-    if (!byId.has(pinned.id)) {
-      byId.set(pinned.id, pinned);
-    }
+  const { data: plan, error: planError } = await supabase
+    .from("document_chunks")
+    .select("*")
+    .eq("source", SOURCE.PLAN_DOCUMENT)
+    .order("page", { ascending: true })
+    .order("created_at", { ascending: true });
+  if (planError) {
+    throw new Error(`Failed to load FlexiPAX Plan Document: ${planError.message}`);
   }
 
-  return Array.from(byId.values()).sort((a, b) => b.rank - a.rank);
+  return {
+    passages: [...(cob ?? []), ...(plan ?? [])].map((row) => ({
+      ...(row as RetrievedPassage),
+      rank: 0,
+    })),
+    scope: "both documents, complete text (all pages)",
+  };
+}
+
+/** Extra instruction when the user asks about a specific document page. */
+export function pageQueryDirective(query: string, _scope: string): string {
+  const pageNumber = parsePageNumber(query);
+  if (pageNumber === null) return "";
+
+  const sourceFilter = parsePageSourceFilter(query);
+  const parts = [
+    `The traveler asked about page ${pageNumber}. The full text of both documents is provided below; each passage is labeled (p.N) with its PDF page number.`,
+    `Summarize what is on page ${pageNumber} using only passages labeled (p.${pageNumber}).`,
+    "Do not refuse for privacy — summarizing plan pages from the provided text is your job.",
+    "Do not substitute content from a different page or document.",
+  ];
+
+  if (sourceFilter === SOURCE.PLAN_DOCUMENT) {
+    parts.push(
+      `They asked about the FlexiPAX Plan Document — use only passages under "${SOURCE_LABELS[SOURCE.PLAN_DOCUMENT]}" labeled (p.${pageNumber}). Do not answer with Confirmation of Benefits content.`,
+    );
+  } else if (sourceFilter === SOURCE.CONFIRMATION_OF_BENEFITS) {
+    parts.push(
+      `They asked about the Confirmation of Benefits — use only passages under "${SOURCE_LABELS[SOURCE.CONFIRMATION_OF_BENEFITS]}" labeled (p.${pageNumber}). Do not answer with Plan Document content.`,
+    );
+  } else {
+    parts.push(
+      `If both documents have a page ${pageNumber}, summarize each document separately under clear headings.`,
+    );
+  }
+
+  return parts.join(" ");
 }

@@ -177,3 +177,40 @@ internals, and never crash** on messy input.
 | # | Question | Expected behavior | Result |
 |---|---|---|---|
 | T1 | This is ridiculous, your company is useless and I want my money NOW. | Stays calm, professional, empathetic; routes to TII. | Pass — calm, de-escalating, asks for context, routes to TII. |
+
+## Client feedback scenarios (broader document knowledge)
+| # | Question | Expected behavior | Result |
+|---|---|---|---|
+| CF1 | What types of concierge services are available? | Lists concierge services from Plan Document (destination profiles, restaurant reservations, hotel, rental car, airline, event tickets, shopping, etc.); notes third-party costs; 24/7 assistance line. | Pass — full concierge + business concierge lists, availability, 800-494-9907. |
+| CF2 | Why should I buy travel insurance? | In scope — summarizes THIS plan's documented benefits with logical value framing; does NOT refuse as off-topic. | Pass — grounded benefit summary with value framing; no out-of-scope refusal. |
+| CF3 | Tell me about page 4 of my plan document. | Describes Worldwide Non-Insurance Assistance Services; does NOT claim section is unavailable. | Pass — full p.4 assistance/concierge/ID theft summary. |
+| CF4 | Can you summarize the different sections of my documents? | Structured overview of CoB + Plan Document topics from retrieved content; explains relevant excerpts are used per question. | Pass — structured CoB amounts + assistance sections + contacts. |
+
+## Page-summary tests (random pages, PDF-validated)
+
+These tests validate page answers against the **source PDF files** in
+`docs/source-documents/`, not against Supabase chunks.
+
+**Script:** `node scripts/test/run-random-pages.mjs`  
+**Report:** `scripts/test/random-pages-results.md`
+
+| ID | Question | PDF ground truth | Result (2026-06-07, local) |
+|---|---|---|---|
+| RAND-PD-17 | Can you summarize page 17 of my plan document? | Political/Security + Natural Disaster Evacuation | Pass |
+| RAND-PD-42 | What's on page 42? | Maine state amendatory endorsements | Pass |
+| RAND-COB-2 | Give me a summary of page 2 of my confirmation of benefits. | Benefits schedule with purchased amounts | Pass |
+| RAND-PD-31 | Tell me about page 31 of the FlexiPAX plan document. | Claims procedures, rental car damage, notice of claim | Pass |
+| RAND-BOTH-4 | What does page 4 cover? | CoB coverage letter + Plan assistance services | Pass |
+
+**Both-doc regression (11 cases):** `node scripts/test/run-both-docs.mjs` — Pass 11/11 (local, 2026-06-07).
+
+## Short / keyword prompts
+| # | Question | Expected behavior | Result |
+|---|---|---|---|
+| SH1 | concierge | Same as CF1 — lists concierge services without asking to rephrase. | Pass — full concierge answer from one-word prompt. |
+| SH2 | dental | States $750 dental sublimit under A&S Medical. | Pass |
+| SH3 | baggage | Summarizes baggage coverage and limits from CoB + Plan Document. | Pass |
+| SH4 | assistance | Describes 24/7 non-insurance assistance services. | Pass |
+| SH5 | page 4 | Summarizes Worldwide Non-Insurance Assistance section. | Pass |
+| SH6 | summary | Structured plan overview from both documents. | Pass |
+| SH7 | why buy insurance? | In-scope value summary from documented benefits. | Pass |

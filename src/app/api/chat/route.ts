@@ -1,6 +1,6 @@
 import { anthropic } from "@ai-sdk/anthropic";
 import { convertToCoreMessages, streamText, type Message } from "ai";
-import { retrievePassages } from "@/lib/retrieval/search";
+import { retrievePassages, pageQueryDirective } from "@/lib/retrieval/search";
 import { buildSystemPrompt, formatContext } from "@/lib/ai/prompt";
 import { analyzeUserMessage, guardrailDirective } from "@/lib/ai/guardrails";
 import { getClientIp, rateLimit } from "@/lib/rate-limit";
@@ -53,17 +53,22 @@ export async function POST(req: Request) {
     );
   }
 
-  // 1. Retrieve grounding passages (Confirmation of Benefits always included).
-  const passages = await retrievePassages(query);
+  // 1. Load both plan documents in full (Confirmation of Benefits + Plan Document).
+  const { passages, scope } = await retrievePassages(query);
   const context = formatContext(passages);
 
   // 2. Deterministic guardrail signals reinforce the prompt for this turn.
   const signal = analyzeUserMessage(query);
-  const directive = guardrailDirective(signal);
+  const directive = [
+    guardrailDirective(signal),
+    pageQueryDirective(query, scope),
+  ]
+    .filter(Boolean)
+    .join(" ");
 
   const system = directive
-    ? `${buildSystemPrompt(context)}\n\nTURN-SPECIFIC INSTRUCTION\n${directive}`
-    : buildSystemPrompt(context);
+    ? `${buildSystemPrompt(context, scope)}\n\nTURN-SPECIFIC INSTRUCTION\n${directive}`
+    : buildSystemPrompt(context, scope);
 
   // 3. Stream the grounded answer.
   const result = streamText({
