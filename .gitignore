@@ -97,3 +97,5 @@ Thumbs.db
 *.orig
 scratch/
 tmp/
+# Throwaway scripts (underscore-prefixed) — may touch keys/PII; never commit.
+scripts/**/_*.ts

@@ -1,14 +1,46 @@
 import { anthropic } from "@ai-sdk/anthropic";
-import { convertToCoreMessages, streamText, type Message } from "ai";
-import { retrievePassages, pageQueryDirective } from "@/lib/retrieval/search";
-import { buildSystemPrompt, formatContext } from "@/lib/ai/prompt";
-import { analyzeUserMessage, guardrailDirective } from "@/lib/ai/guardrails";
+import {
+  convertToCoreMessages,
+  streamText,
+  type CoreMessage,
+  type Message,
+} from "ai";
+import { loadGroundingContext, pageQueryDirective } from "@/lib/retrieval/search";
+import { buildCachedCore, buildCobBlock } from "@/lib/ai/prompt";
+import {
+  analyzeUserMessage,
+  guardrailDirective,
+  type GuardrailSignal,
+} from "@/lib/ai/guardrails";
 import { getClientIp, rateLimit } from "@/lib/rate-limit";
 
 // Allow streaming responses up to 30 seconds.
 export const maxDuration = 30;
 
 const MODEL = process.env.ANTHROPIC_MODEL ?? "claude-sonnet-4-6";
+// Optional cheaper model for simple lookups. See selectModel().
+const HAIKU_MODEL = process.env.ANTHROPIC_MODEL_HAIKU ?? "claude-haiku-4-5";
+
+/**
+ * Optional model routing (default OFF). When ENABLE_HAIKU_ROUTING=true, simple,
+ * non-safety-critical lookups can be answered by the cheaper Haiku model.
+ *
+ * Kept off by default because (a) the prompt cache is per-model — switching
+ * models mid-conversation discards the cached prefix — and (b) per the plan,
+ * Haiku must be validated against all 95 test scenarios (especially the
+ * prompt-injection set) before it is trusted on any guardrail-critical path.
+ * Emergency / claim-outcome turns always stay on the primary model.
+ */
+function selectModel(signal: GuardrailSignal): string {
+  if (process.env.ENABLE_HAIKU_ROUTING !== "true") return MODEL;
+  if (signal.isEmergency || signal.asksClaimOutcome) return MODEL;
+  return HAIKU_MODEL;
+}
+
+/** Read a numeric cache stat out of the provider metadata, defaulting to 0. */
+function num(value: unknown): number {
+  return typeof value === "number" ? value : 0;
+}
 
 /**
  * Stream a single static message in the AI SDK data-stream format so the chat
@@ -53,11 +85,13 @@ export async function POST(req: Request) {
     );
   }
 
-  // 1. Load both plan documents in full (Confirmation of Benefits + Plan Document).
-  const { passages, scope } = await retrievePassages(query);
-  const context = formatContext(passages);
+  // 1. Load the grounding context: shared plan full text + this traveler's CoB.
+  //    For the single-plan POC we use the default plan number. In a multi-tenant
+  //    deployment, derive plan_number strictly from the authenticated user so
+  //    one traveler can never receive another's CoB.
+  const { planText, cobPageText, cobFields, scope } = await loadGroundingContext();
 
-  // 2. Deterministic guardrail signals reinforce the prompt for this turn.
+  // 2. Guardrail layer 1 (deterministic input check) + per-turn directive.
   const signal = analyzeUserMessage(query);
   const directive = [
     guardrailDirective(signal),
@@ -66,16 +100,59 @@ export async function POST(req: Request) {
     .filter(Boolean)
     .join(" ");
 
-  const system = directive
-    ? `${buildSystemPrompt(context, scope)}\n\nTURN-SPECIFIC INSTRUCTION\n${directive}`
-    : buildSystemPrompt(context, scope);
+  const model = selectModel(signal);
 
-  // 3. Stream the grounded answer.
+  // 3. Build the prompt as cached prefix blocks + a volatile per-turn directive.
+  //    Order is load-bearing for caching: longer-TTL, plan-shared block first
+  //    (core rules + plan doc), then the per-traveler CoB, then — AFTER both
+  //    cache breakpoints — the uncached turn directive.
+  const systemMessages: CoreMessage[] = [
+    {
+      role: "system",
+      content: buildCachedCore(planText),
+      providerOptions: {
+        anthropic: { cacheControl: { type: "ephemeral", ttl: "1h" } },
+      },
+    },
+    {
+      role: "system",
+      content: buildCobBlock(cobPageText, cobFields),
+      providerOptions: {
+        anthropic: { cacheControl: { type: "ephemeral" } },
+      },
+    },
+  ];
+  if (directive) {
+    // Uncached, every turn, at full system authority — placed after both
+    // cache breakpoints so it never invalidates the cached prefix.
+    systemMessages.push({
+      role: "system",
+      content: `TURN-SPECIFIC INSTRUCTION\n${directive}`,
+    });
+  }
+
+  // 4. Stream the grounded answer. Instrument cache usage so we can confirm the
+  //    prefix is being reused (cache_read_input_tokens > 0 on turn 2+).
   const result = streamText({
-    model: anthropic(MODEL),
-    system,
-    messages: convertToCoreMessages(messages),
+    model: anthropic(model),
+    messages: [...systemMessages, ...convertToCoreMessages(messages)],
     temperature: 0.2,
+    onFinish({ usage, providerMetadata }) {
+      const anth = providerMetadata?.anthropic;
+      const cacheRead = num(anth?.cacheReadInputTokens);
+      const cacheCreation = num(anth?.cacheCreationInputTokens);
+      console.log(
+        JSON.stringify({
+          event: "chat_usage",
+          model,
+          inputTokens: usage?.promptTokens ?? 0,
+          outputTokens: usage?.completionTokens ?? 0,
+          cacheReadInputTokens: cacheRead,
+          cacheCreationInputTokens: cacheCreation,
+          turns: messages.length,
+        }),
+      );
+    },
   });
 
   return result.toDataStreamResponse();

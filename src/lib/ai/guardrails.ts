@@ -43,7 +43,7 @@ export function guardrailDirective(signal: GuardrailSignal): string {
   const parts: string[] = [];
   if (signal.isEmergency) {
     parts.push(
-      `The traveler may be describing an urgent situation. Lead your answer by directing them to the 24/7 assistance line ${TII_CONTACTS.emergencyAssistance.tollFreeUsCanada} (or collect ${TII_CONTACTS.emergencyAssistance.collect}), and note that emergency medical evacuation must be pre-authorized.`,
+      `The traveler may be describing an urgent or dangerous situation. Open with exactly ONE short, warm sentence of acknowledgment (for example: "I'm so sorry — this is frightening, and getting you safe is what matters most right now."). Immediately after that single sentence — with nothing between them — put the prominent safety step on its own line: if they are in immediate physical danger, that line is a bolded instruction to call 911 or the local emergency number. Then give the 24/7 assistance line ${TII_CONTACTS.emergencyAssistance.tollFreeUsCanada} (or collect ${TII_CONTACTS.emergencyAssistance.collect}) and note that emergency medical evacuation must be pre-authorized. The acknowledgment must be one sentence only — never a paragraph, and it must never delay or replace the safety step. Do not offer claim help while they are in danger.`,
     );
   }
   if (signal.asksClaimOutcome) {

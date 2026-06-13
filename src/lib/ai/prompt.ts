@@ -1,48 +1,72 @@
-import { SOURCE, SOURCE_LABELS } from "@/config/tii";
 import { buildCoreInstructions } from "@/lib/ai/grounding-rules";
-import type { RetrievedPassage } from "@/types";
+import { SOURCE_LABELS, SOURCE } from "@/config/tii";
+import type { CobFields } from "@/config/cob-fields";
 
 /**
- * Formats the full Confirmation of Benefits and FlexiPAX Plan Document for the
- * model context, grouped by source document.
+ * Prompt assembly for prompt-cached requests. The system prompt is split into
+ * two stable blocks (cached) plus a per-turn directive (volatile, kept out of
+ * here — see the route). Order matters for caching: the longer-lived, more
+ * widely shared block comes first.
+ *
+ *   1. {@link buildCachedCore}  — core rules/guardrails + shared plan document.
+ *      Shared across every traveler on the plan. Cached with the longer TTL.
+ *   2. {@link buildCobBlock}    — the traveler's CoB (structured facts + page
+ *      text). Per-traveler. Cached with the default TTL.
+ *
+ * Nothing volatile (chat history, the latest question, the turn directive) goes
+ * into these blocks — any byte change before a cache breakpoint is a cache miss.
  */
-export function formatContext(passages: RetrievedPassage[]): string {
-  if (passages.length === 0) {
-    return "(No document passages were loaded.)";
-  }
 
-  const formatSection = (title: string, items: RetrievedPassage[]) => {
-    if (items.length === 0) return "";
-    const body = items
-      .map((p, i) => {
-        const section = p.section ? ` › ${p.section}` : "";
-        const page = p.page ? ` (p.${p.page})` : "";
-        return `[${i + 1}]${section}${page}\n${p.content}`;
-      })
-      .join("\n\n");
-    return `### ${title}\n\n${body}`;
-  };
+const USD = new Intl.NumberFormat("en-US", {
+  style: "currency",
+  currency: "USD",
+  maximumFractionDigits: 0,
+});
 
-  const sortByPage = (items: RetrievedPassage[]) =>
-    [...items].sort(
-      (a, b) => (a.page ?? 0) - (b.page ?? 0) || a.content.localeCompare(b.content),
-    );
-
-  const cob = sortByPage(passages.filter((p) => p.source === SOURCE.CONFIRMATION_OF_BENEFITS));
-  const plan = sortByPage(passages.filter((p) => p.source === SOURCE.PLAN_DOCUMENT));
-
-  return [
-    formatSection(SOURCE_LABELS[SOURCE.CONFIRMATION_OF_BENEFITS], cob),
-    formatSection(SOURCE_LABELS[SOURCE.PLAN_DOCUMENT], plan),
-  ]
-    .filter(Boolean)
-    .join("\n\n");
-}
-
-export function buildSystemPrompt(context: string, scope: string): string {
+/**
+ * Cached prefix block #1: standing rules + the shared FlexiPAX plan document.
+ * This is the large, stable, plan-shared block (cache with the longer TTL).
+ */
+export function buildCachedCore(planText: string): string {
   return `${buildCoreInstructions()}
 
-DOCUMENT TEXT (${scope})
+${SOURCE_LABELS[SOURCE.PLAN_DOCUMENT]} (full text, all pages; each page labeled (p.N))
 
-${context}`;
+${planText}`;
+}
+
+/** Render the authoritative structured CoB facts as a labeled block. */
+function formatStructuredFacts(fields: CobFields): string {
+  const { purchased_limits: limits, trip_dates: trip } = fields;
+  return [
+    "CONFIRMATION OF BENEFITS — STRUCTURED FACTS (authoritative)",
+    "These are the traveler's actual purchased amounts and trip details. Use these exact values.",
+    "SOURCE PRECEDENCE: the Confirmation of Benefits purchased amount ALWAYS overrides the base plan amount in the FlexiPAX Plan Document when the two differ (for example, Trip Delay is $1,500 from the CoB, not the $1,000 base). Read amounts from these fields — do not parse dollar figures out of the plan document text.",
+    "",
+    `Plan number: ${fields.plan_number}`,
+    `Plan: ${fields.plan_id}`,
+    `Policyholder: ${fields.policyholder}`,
+    `Trip dates: ${trip.departure} to ${trip.return}`,
+    `Destination: ${fields.destination}`,
+    "Purchased benefit limits:",
+    `- Trip Delay: ${USD.format(limits.trip_delay)}`,
+    `- Baggage & Personal Effects: ${USD.format(limits.baggage_personal_effects)}`,
+    `- Baggage Delay: ${USD.format(limits.baggage_delay)}`,
+    `- Base plan: ${USD.format(limits.base_plan)}`,
+    `Issue date: ${fields.issue_date}`,
+    `Effective date: ${fields.effective_date}`,
+  ].join("\n");
+}
+
+/**
+ * Cached prefix block #2: the traveler's Confirmation of Benefits.
+ * Structured facts (authoritative) followed by the labeled page text (so
+ * page-summary queries still work). Cache with the default TTL.
+ */
+export function buildCobBlock(cobPageText: string, cobFields: CobFields): string {
+  return `${formatStructuredFacts(cobFields)}
+
+${SOURCE_LABELS[SOURCE.CONFIRMATION_OF_BENEFITS]} — PAGE TEXT (each page labeled (p.N))
+
+${cobPageText}`;
 }
