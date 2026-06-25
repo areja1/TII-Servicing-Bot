@@ -13,9 +13,16 @@ import {
   type GuardrailSignal,
 } from "@/lib/ai/guardrails";
 import { getClientIp, rateLimit } from "@/lib/rate-limit";
+import { handleFnolTurn } from "@/lib/fnol/fnol-handler";
+import { initialFnolState, applyFnolMessage } from "@/lib/fnol/fnol-state";
+import type { FnolState } from "@/lib/fnol/fnol-state";
+import { checkFlightStatus } from "@/lib/flight/flight-status";
 
 // Allow streaming responses up to 30 seconds.
 export const maxDuration = 30;
+
+// Deliberate "taking details" pause before each scripted FNOL reply (ms).
+const FNOL_THINKING_MS = 1500;
 
 const MODEL = process.env.ANTHROPIC_MODEL ?? "claude-sonnet-4-6";
 // Optional cheaper model for simple lookups. See selectModel().
@@ -62,6 +69,31 @@ function staticMessage(text: string): Response {
   });
 }
 
+async function deriveFnolStateFromHistory(messages: Message[]): Promise<FnolState> {
+  const state = initialFnolState();
+  // Stateless server: rebuild FNOL state each turn by replaying prior user
+  // messages through the pure accumulator (collectedInfo, active, step).
+  //
+  // claimedFlights holds APPROVED flights only, and validateFlight (which sets
+  // it) never runs during replay, so we reconstruct it here: whenever the
+  // accumulator decides to validate a flight, re-run the lookup and record it
+  // only if it was approved (delayed past the threshold) — matching
+  // validateFlight. For the SWA565/SWA566 demo mocks this is instant and free;
+  // for live flights it costs one lookup per validated flight.
+  for (const m of messages.slice(0, -1)) {
+    if (m.role !== "user") continue;
+    const content = typeof m.content === "string" ? m.content : "";
+    const { action, flightNumber } = applyFnolMessage(state, content);
+    if (action === "validate" && flightNumber) {
+      const result = await checkFlightStatus(flightNumber);
+      if (result.found && result.isDelayed) {
+        state.claimedFlights = [...(state.claimedFlights ?? []), flightNumber];
+      }
+    }
+  }
+  return state;
+}
+
 export async function POST(req: Request) {
   // 0a. Rate limit per client IP to protect the public endpoint (and the
   //     Anthropic key) from spam. Rejected before any model call.
@@ -83,6 +115,19 @@ export async function POST(req: Request) {
     return staticMessage(
       "It looks like your message was empty. Ask me anything about your travel insurance plan — for example your coverage and benefit amounts, what to do if something goes wrong on your trip, or how to file a claim.",
     );
+  }
+
+  // FNOL flow: deterministic check before any model call.
+  // Re-derives state from message history and runs the decision tree.
+  // Returns a scripted response directly if handled, otherwise falls through to the model.
+  const fnolState = await deriveFnolStateFromHistory(messages);
+  const fnolResult = await handleFnolTurn(fnolState, query);
+  if (fnolResult.handled && fnolResult.response) {
+    // Brief, deliberate pause so the scripted reply feels like the bot is
+    // taking down the detail (the chat shows its typing indicator meanwhile),
+    // rather than answering instantly. ~1.5s.
+    await new Promise((resolve) => setTimeout(resolve, FNOL_THINKING_MS));
+    return staticMessage(fnolResult.response);
   }
 
   // 1. Load the grounding context: shared plan full text + this traveler's CoB.
@@ -131,11 +176,29 @@ export async function POST(req: Request) {
     });
   }
 
+  // Replace the FNOL scripted outcome messages in the history with neutral
+  // placeholders before the model sees them, so it never tries to apologize for
+  // or contradict an approved/checked claim it didn't author. The traveler still
+  // saw the real scripted message in their chat; only the model's copy changes.
+  const modelMessages: Message[] = messages.map((m) => {
+    if (m.role !== "assistant" || typeof m.content !== "string") return m;
+    if (m.content.includes("Your Trip Delay claim is now in process")) {
+      return { ...m, content: "I have noted your flight delay details." };
+    }
+    if (
+      m.content.includes("I checked flight") ||
+      m.content.includes("I wasn't able to find flight")
+    ) {
+      return { ...m, content: "I have noted your flight number." };
+    }
+    return m;
+  });
+
   // 4. Stream the grounded answer. Instrument cache usage so we can confirm the
   //    prefix is being reused (cache_read_input_tokens > 0 on turn 2+).
   const result = streamText({
     model: anthropic(model),
-    messages: [...systemMessages, ...convertToCoreMessages(messages)],
+    messages: [...systemMessages, ...convertToCoreMessages(modelMessages)],
     temperature: 0.2,
     onFinish({ usage, providerMetadata }) {
       const anth = providerMetadata?.anthropic;

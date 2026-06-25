@@ -4,9 +4,10 @@ A publicly accessible text-chat assistant for **Travel Insured International (TI
 that answers travel-insurance servicing questions grounded in two documents:
 the traveler's **Confirmation of Benefits** and the **FlexiPAX Plan Document**.
 
-Each question is answered using the **full text of both documents** loaded from
-Supabase, with guardrails that prevent claim decisions, invented benefits, and
-medical/legal advice, and that escalate urgent issues to the correct TII contact.
+It uses Retrieval-Augmented Generation (RAG): each question is answered using
+passages retrieved from the documents, with guardrails that prevent claim
+decisions, invented benefits, and medical/legal advice, and that escalate
+urgent issues to the correct TII contact.
 
 > Proof-of-concept built to the requirements in
 > [`docs/Proof of Concept Requirements.docx`](docs/Proof%20of%20Concept%20Requirements.docx).
