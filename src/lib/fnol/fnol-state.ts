@@ -1,5 +1,9 @@
 export interface FnolCollectedInfo {
+  /** The only field the intake actively collects from the traveler. */
   flightNumber?: string;
+  // travelerName and policyNumber are already on file from the traveler's
+  // Confirmation of Benefits, so the intake never asks for them. They are still
+  // stored here if the traveler happens to volunteer them in a message.
   travelerName?: string;
   policyNumber?: string;
 }
@@ -29,6 +33,18 @@ export function initialFnolState(): FnolState {
  */
 export function isFnolTrigger(message: string): boolean {
   const text = message.toLowerCase();
+  // Coverage / eligibility questions are NOT delay reports, even when they
+  // mention "flight" and "delay" (e.g. "can I claim for both the flight delay
+  // and the lost passport"). If the message opens with one of these phrasings,
+  // it's asking about coverage, not reporting a delay happening now — never
+  // trigger the FNOL flow.
+  if (
+    /^\s*(?:can i|could i|is it possible|am i able|do i|will i|would i)\b/.test(
+      text,
+    )
+  ) {
+    return false;
+  }
   // "flight" and "delay(ed)" near each other, in either order, tolerating a
   // flight number or other words in between (e.g. "my flight SWA566 was delayed").
   if (/\bflight\b[\s\S]{0,40}delay/.test(text)) return true;

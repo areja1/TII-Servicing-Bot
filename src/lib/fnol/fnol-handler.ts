@@ -41,27 +41,23 @@ function humanList(items: string[]): string {
   return `${items.slice(0, -1).join(', ')}, and ${items[items.length - 1]}`;
 }
 
-/** Fields still missing from the collected info (used to ask only what's needed). */
+/**
+ * Fields still missing from the collected info (used to ask only what's needed).
+ * The traveler's name and policy number are already on file from the
+ * Confirmation of Benefits, so the flight number is the only field we collect.
+ */
 function missingFields(info: FnolCollectedInfo): string[] {
   const missing: string[] = [];
-  if (!info.travelerName) missing.push('your full name');
-  if (!info.policyNumber) missing.push('your policy or plan number');
   if (!info.flightNumber) missing.push('your flight number (for example, SWA566)');
   return missing;
 }
 
-/** Ask only for the fields that are still missing. */
+/** Ask only for the fields that are still missing (just the flight number). */
 function buildAskPrompt(info: FnolCollectedInfo, opening: boolean): string {
-  const ask = humanList(missingFields(info));
-  // Returning traveler whose name and policy are already on file (e.g. a fresh
-  // trigger after an approved claim): skip the apology/"To begin" opener and
-  // just ask for the new flight number.
-  if (opening && info.travelerName && info.policyNumber) {
-    return `Of course — could you share ${ask}?`;
-  }
   if (opening) {
-    return `I'm sorry to hear your flight was delayed — let's get your Trip Delay claim started. To begin, could you share ${ask}?`;
+    return 'I am sorry to hear that. Could you please share your flight number?';
   }
+  const ask = humanList(missingFields(info));
   return `Thanks! I just need ${ask}.`;
 }
 
@@ -120,7 +116,7 @@ Could you verify the flight number? If you believe this is an error, please cont
 
 Under your FlexiPAX plan, Trip Delay reimburses your reasonable additional expenses and additional transportation costs at up to $${TRIP_DELAY_PER_DIEM} per day, up to your $${TRIP_DELAY_MAX.toLocaleString('en-US')} maximum. For a delay of this length (${days} day${days === 1 ? '' : 's'}), you're eligible for up to $${eligibleAmount.toLocaleString('en-US')}.
 
-Your Trip Delay claim is now in process and should be approved within the next 30 minutes. If you have not received your payout via virtual debit card by then, please contact us again at [1-800-243-3174](tel:+18002433174) or reach out in this chat.`,
+Your Trip Delay claim is now in process and should be approved within the next 30 minutes. If you have not received your payout via virtual debit card on your OZZI app, check your email or please contact us at [1-800-243-3174](tel:+18002433174) or reach out in this chat.`,
   };
 }
 
@@ -152,6 +148,16 @@ export async function handleFnolTurn(
   const { action, flightNumber } = applyFnolMessage(state, userMessage);
 
   if (action === 'validate' && flightNumber) {
+    // Only run the lookup when THIS message actually names a flight number. The
+    // server is stateless — FNOL state is rebuilt from history every request —
+    // so a flight number with no new number in the current message is one that
+    // was already validated on an earlier turn (and, when not delayed / not
+    // found, was never recorded in claimedFlights). Re-validating it would loop
+    // the same not-delayed / not-found scripted reply forever. Defer instead so
+    // the model can answer the follow-up. Mirrors the 'duplicate' guard below.
+    if (extractFlightNumber(userMessage) === null) {
+      return { handled: false, updatedState: state };
+    }
     return validateFlight(state, flightNumber);
   }
 
