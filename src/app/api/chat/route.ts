@@ -14,7 +14,11 @@ import {
 } from "@/lib/ai/guardrails";
 import { getClientIp, rateLimit } from "@/lib/rate-limit";
 import { handleFnolTurn } from "@/lib/fnol/fnol-handler";
-import { initialFnolState, applyFnolMessage } from "@/lib/fnol/fnol-state";
+import {
+  initialFnolState,
+  applyFnolMessage,
+  applyFlightValidationResult,
+} from "@/lib/fnol/fnol-state";
 import type { FnolState } from "@/lib/fnol/fnol-state";
 import { checkFlightStatus } from "@/lib/flight/flight-status";
 
@@ -72,23 +76,26 @@ function staticMessage(text: string): Response {
 async function deriveFnolStateFromHistory(messages: Message[]): Promise<FnolState> {
   const state = initialFnolState();
   // Stateless server: rebuild FNOL state each turn by replaying prior user
-  // messages through the pure accumulator (collectedInfo, active, step).
+  // messages through the pure accumulator (collectedInfo, active, step,
+  // pendingApproval, pnrAttempts, claimedFlights).
   //
-  // claimedFlights holds APPROVED flights only, and validateFlight (which sets
-  // it) never runs during replay, so we reconstruct it here: whenever the
-  // accumulator decides to validate a flight, re-run the lookup and record it
-  // only if it was approved (delayed past the threshold) — matching
-  // validateFlight. For the SWA565/SWA566 demo mocks this is instant and free;
-  // for live flights it costs one lookup per validated flight.
+  // The one non-pure step is the flight-status lookup itself (async), which
+  // can't live inside applyFnolMessage — so on a replayed "validate" action we
+  // re-run it here and apply the result through the SAME applyFlightValidationResult
+  // mutator that fnol-handler's validateFlight uses live, so replay and a live
+  // turn can never reach different states for the same history. The PNR check
+  // (verifyBooking) is synchronous and lives entirely inside applyFnolMessage,
+  // so claimedFlights only ever gets written there — once a flight has BOTH a
+  // qualifying delay AND a verified PNR — with no special-casing needed here.
+  // For the SWA565/SWA566 demo mocks the lookup is instant and free; for live
+  // flights it costs one lookup per validated flight number.
   for (const m of messages.slice(0, -1)) {
     if (m.role !== "user") continue;
     const content = typeof m.content === "string" ? m.content : "";
     const { action, flightNumber } = applyFnolMessage(state, content);
     if (action === "validate" && flightNumber) {
       const result = await checkFlightStatus(flightNumber);
-      if (result.found && result.isDelayed) {
-        state.claimedFlights = [...(state.claimedFlights ?? []), flightNumber];
-      }
+      applyFlightValidationResult(state, flightNumber, result);
     }
   }
   return state;
@@ -212,6 +219,25 @@ export async function POST(req: Request) {
     }
     if (m.content.includes("wasn't able to find flight")) {
       return [{ ...m, content: "I have noted your flight number." }];
+    }
+    if (m.content.includes("could you provide the PNR")) {
+      return [
+        {
+          ...m,
+          content: "I have confirmed the flight delay and am waiting on the PNR to verify this claim.",
+        },
+      ];
+    }
+    if (m.content.includes("No data found for that PNR")) {
+      return [
+        {
+          ...m,
+          content: "I asked for the booking confirmation number again to verify this claim.",
+        },
+      ];
+    }
+    if (m.content.includes("wasn't able to verify that PNR")) {
+      return [{ ...m, content: "I have noted the PNR provided and referred this claim for manual review." }];
     }
     return [m];
   });

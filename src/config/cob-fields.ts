@@ -24,7 +24,19 @@ export interface CobTripDates {
 }
 
 export interface CobPurchasedLimits {
-  /** Trip Delay max benefit, including the purchased optional increase. */
+  /**
+   * Trip Delay max benefit, including the purchased optional increase.
+   *
+   * AMBIGUITY (documented, not resolved — flag for Isaiah / TII to clarify in
+   * production): this is stored as a single aggregate total ($1,500) with no
+   * explicit per-flight or per-occurrence language in the plan config. It is
+   * NOT definitively answered here whether two separate delayed flights on the
+   * same trip can each generate a claim up to a combined $1,500, or whether it
+   * is one claim per trip regardless of how many flights were delayed. No code
+   * currently branches on this — the FNOL flow treats each qualifying flight
+   * independently — but the aggregate-vs-per-occurrence question should be
+   * confirmed with the plan owner before this is relied on in production.
+   */
   trip_delay: number;
   /** Baggage & Personal Effects max, including the purchased optional increase. */
   baggage_personal_effects: number;

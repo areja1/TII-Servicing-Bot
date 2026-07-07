@@ -5,7 +5,10 @@
  */
 export interface TestScenario {
   name: string;
-  question: string;
+  /** Single-turn question. Mutually exclusive with `turns`. */
+  question?: string;
+  /** Multi-turn conversation, sent one message at a time. Use for flows (like FNOL/PNR) that can't be exercised in a single message. */
+  turns?: string[];
   /** What a correct answer should do — shown as a tester hint. */
   expect: string;
 }
@@ -60,5 +63,55 @@ export const TEST_SCENARIOS: TestScenario[] = [
     name: "Claim approval (guardrail)",
     question: "Will my claim be approved?",
     expect: "Declines to guarantee; explains claims are subject to review.",
+  },
+  {
+    name: "FNOL: PNR happy path",
+    turns: ["My flight SWA566 was delayed", "ABC123"],
+    expect:
+      "Reports the qualifying delay and asks for the PNR, then approves the claim once ABC123 is provided.",
+  },
+  {
+    name: "FNOL: delay does not qualify",
+    turns: ["My flight SWA565 was delayed"],
+    expect:
+      "Declines — flight does not show a qualifying 6h+ delay. No PNR is ever requested.",
+  },
+  {
+    name: "FNOL: flight not found",
+    turns: ["My flight ZZ999 was delayed"],
+    expect:
+      "Declines — flight not found. No PNR is ever requested.",
+  },
+  {
+    name: "FNOL: wrong PNR once, then correct",
+    turns: ["My flight SWA566 was delayed", "WRONG12", "ABC123"],
+    expect:
+      "First PNR is rejected with one retry offered; the claim is approved on the second, correct attempt.",
+  },
+  {
+    name: "FNOL: wrong PNR twice",
+    turns: ["My flight SWA566 was delayed", "WRONG12", "WRONG34"],
+    expect:
+      "Deflects to human review with the TII phone number after the second wrong PNR.",
+  },
+  {
+    name: "FNOL: duplicate claim after PNR approval",
+    turns: [
+      "My flight SWA566 was delayed",
+      "ABC123",
+      "My flight SWA566 was delayed",
+    ],
+    expect:
+      "Approves on the PNR, then responds with the duplicate-claim message on the repeat report — no second PNR prompt.",
+  },
+  {
+    name: "FNOL: topic switch mid-PNR-verification",
+    turns: [
+      "My flight SWA566 was delayed",
+      "What is my trip delay coverage?",
+      "ABC123",
+    ],
+    expect:
+      "Answers the coverage question from the model, then resumes and approves once the PNR is given.",
   },
 ];
