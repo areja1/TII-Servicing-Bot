@@ -1,5 +1,13 @@
 import { checkFlightStatus } from '@/lib/flight/flight-status';
-import { applyFnolMessage, isFnolTrigger, extractFlightNumber } from '@/lib/fnol/fnol-state';
+import {
+  applyFnolMessage,
+  applyFlightValidationResult,
+  isFnolTrigger,
+  isNewFlightReport,
+  extractFlightNumber,
+  extractPnr,
+  looksLikeQuestion,
+} from '@/lib/fnol/fnol-state';
 import type { FnolState, FnolCollectedInfo } from '@/lib/fnol/fnol-state';
 
 export interface FnolHandlerResult {
@@ -48,7 +56,9 @@ function humanList(items: string[]): string {
  */
 function missingFields(info: FnolCollectedInfo): string[] {
   const missing: string[] = [];
-  if (!info.flightNumber) missing.push('your flight number (for example, SWA566)');
+  if (!info.flightNumber) {
+    missing.push('your flight number (for example, SWA566)');
+  }
   return missing;
 }
 
@@ -62,30 +72,32 @@ function buildAskPrompt(info: FnolCollectedInfo, opening: boolean): string {
 }
 
 /**
- * Run the flight-status lookup and build the terminal scripted response.
- * The flight number is the ONLY input needed — no delay duration or reason.
+ * Run the flight-status lookup for a flight number + date and build the
+ * scripted response.
+ *   - Not found, or delayed less than 6h: terminal decline. The PNR is never
+ *     requested in this case — this is the hard stop.
+ *   - Delayed 6h+: reports the delay and asks for the PNR; approval (and the
+ *     dollar amount / claimedFlights write) happens in confirmPnrAndFinalize,
+ *     only once the PNR also checks out.
  */
 async function validateFlight(
   state: FnolState,
   flightNumber: string,
 ): Promise<FnolHandlerResult> {
   const result = await checkFlightStatus(flightNumber);
+  const outcome = applyFlightValidationResult(state, flightNumber, result);
 
-  if (result.found === false) {
-    state.step = 'error';
-    state.outcome = 'not_found';
+  if (outcome === 'not_found') {
     return {
       handled: true,
       updatedState: state,
-      response: `I wasn't able to find flight ${flightNumber} in our system. Could you double-check the flight number? It should be the airline code followed by the flight digits, for example SWA566.
+      response: `I wasn't able to find flight ${flightNumber} in our system. Could you double-check the flight number? The flight number should be the airline code followed by the flight digits, for example SWA566.
 
 If you believe this is correct, please contact TII directly at [1-800-243-3174](tel:+18002433174) (weekdays 8:00 AM – 6:00 PM ET).`,
     };
   }
 
-  if (result.isDelayed === false) {
-    state.step = 'not_delayed';
-    state.outcome = 'not_delayed';
+  if (outcome === 'not_delayed') {
     return {
       handled: true,
       updatedState: state,
@@ -95,49 +107,50 @@ Could you verify the flight number? If you believe this is an error, please cont
     };
   }
 
-  // Delayed past the 6-hour minimum: approve and compute the doc-grounded amount.
-  state.step = 'complete';
-  state.outcome = 'approved';
-  // Only APPROVED flights are recorded as claimed, so they can't be claimed
-  // again; not-delayed / not-found flights stay re-tryable.
-  state.claimedFlights = [...(state.claimedFlights ?? []), flightNumber];
-
-  // Maximum entitlement as per the docs: $150/day for the confirmed delay,
-  // capped at the $1,500 plan maximum. Floor the delay at the 6-hour trigger so
-  // the wording never contradicts the eligibility.
-  const delayMinutes = Math.max(result.delayMinutes ?? 0, TRIP_DELAY_MIN_MINUTES);
-  const days = delayDays(delayMinutes);
-  const eligibleAmount = Math.min(days * TRIP_DELAY_PER_DIEM, TRIP_DELAY_MAX);
-
+  // 'qualifying': report the delay and ask for the PNR. Floor the delay at the
+  // 6-hour trigger so the wording never contradicts the eligibility.
+  const delayMinutes = Math.max(state.pendingApproval?.delayMinutes ?? 0, TRIP_DELAY_MIN_MINUTES);
   return {
     handled: true,
     updatedState: state,
     response: `Great news — flight ${flightNumber} is confirmed delayed ${formatDelay(delayMinutes)}, which meets your plan's 6-consecutive-hour Trip Delay requirement.
 
-Under your FlexiPAX plan, Trip Delay reimburses your reasonable additional expenses and additional transportation costs at up to $${TRIP_DELAY_PER_DIEM} per day, up to your $${TRIP_DELAY_MAX.toLocaleString('en-US')} maximum. For a delay of this length (${days} day${days === 1 ? '' : 's'}), you're eligible for up to $${eligibleAmount.toLocaleString('en-US')}.
-
-Your Trip Delay claim is now in process and should be approved within the next 30 minutes. If you have not received your payout via virtual debit card on your OZZI app, check your email or please contact us at [1-800-243-3174](tel:+18002433174) or reach out in this chat.`,
+To verify this claim, could you provide the PNR (booking confirmation number) on your reservation?`,
   };
 }
 
 /**
- * Dynamic FNOL turn. Extracts whatever fields are in the message, then:
- *  - validates immediately once a flight number is present (any turn, any order);
- *  - otherwise asks only for the fields still missing;
- *  - otherwise defers to the model.
+ * Build the dollar-amount approval message for a confirmed qualifying delay.
+ * Shared by confirmPnrAndFinalize (the only caller, now that approval waits
+ * on the PNR) so the wording matches what travelers saw pre-PNR-verification.
  */
-/** True if the message reads like a question or a topic switch, not an answer. */
-function looksLikeQuestion(message: string): boolean {
-  const trimmed = message.trim();
-  if (trimmed.endsWith('?')) return true;
-  if (/^(what|how|can|do|does|is|are|show|tell|why|who)\b/i.test(trimmed)) return true;
-  // Topic-switch / deflection signals anywhere in the message.
-  const lower = trimmed.toLowerCase();
-  if (/\b(forget|ignore|skip|instead|go back|actually)\b/.test(lower)) return true;
-  if (lower.includes('what is the maximum')) return true;
-  return false;
+function buildApprovalMessage(flightNumber: string, delayMinutesRaw: number): string {
+  const delayMinutes = Math.max(delayMinutesRaw, TRIP_DELAY_MIN_MINUTES);
+  const days = delayDays(delayMinutes);
+  const eligibleAmount = Math.min(days * TRIP_DELAY_PER_DIEM, TRIP_DELAY_MAX);
+
+  return `Thanks — that PNR matches our records for flight ${flightNumber}.
+
+Under your FlexiPAX plan, Trip Delay reimburses your reasonable additional expenses and additional transportation costs at up to $${TRIP_DELAY_PER_DIEM} per day, up to your $${TRIP_DELAY_MAX.toLocaleString('en-US')} maximum. For a delay of this length (${days} day${days === 1 ? '' : 's'}), you're eligible for up to $${eligibleAmount.toLocaleString('en-US')}.
+
+Your Trip Delay claim is now in process and should be approved within the next 30 minutes. If you have not received your payout via virtual debit card on your OZZI app, check your email or please contact us at [1-800-243-3174](tel:+18002433174) or reach out in this chat.`;
 }
 
+/**
+ * Dynamic FNOL turn. Runs the pure transition (applyFnolMessage) once, then
+ * builds the scripted response for whatever it returned:
+ *  - PNR-phase outcomes (pnr_missing / pnr_retry / pnr_deflect / approve) when
+ *    the message was a PNR answer to a claim awaiting verification;
+ *  - validate once a flight number is present;
+ *  - duplicate for an already-approved flight;
+ *  - ask for the fields still missing;
+ *  - otherwise defers to the model.
+ *
+ * applyFnolMessage owns the confirming_pnr branch internally: a PNR answer is
+ * verified there, but a CLEAR new flight report mid-PNR (isNewFlightReport)
+ * abandons the pending PNR and re-enters normal intake — so this function sees
+ * a normal action (validate / ask / duplicate) in that case, not a PNR one.
+ */
 export async function handleFnolTurn(
   state: FnolState,
   userMessage: string,
@@ -145,7 +158,66 @@ export async function handleFnolTurn(
   // A trigger message opens a (possibly fresh) intake — show the warm opener.
   const opening = isFnolTrigger(userMessage);
 
-  const { action, flightNumber } = applyFnolMessage(state, userMessage);
+  // Mid-PNR-verification: an unrelated question with NO PNR in it defers to the
+  // model BEFORE applyFnolMessage touches state, so it is never misread as a
+  // (wrong) PNR attempt and never burns a retry. Same deflection behavior as
+  // the 'ask' branch below — the model answers it, and the PNR prompt resumes
+  // next turn since state is rebuilt from history. A PNR phrased as a question
+  // ("is it ABC123?") still falls through to verification. A clear new flight
+  // report phrased as a question ("can you check southwest 565?") is NOT
+  // deferred here — isNewFlightReport excludes it so applyFnolMessage handles
+  // the flight switch, keeping this in lockstep with the confirming_pnr branch
+  // in applyFnolMessage (fnol-state.ts) so live and history replay never drift.
+  if (
+    state.step === 'confirming_pnr' &&
+    looksLikeQuestion(userMessage) &&
+    extractPnr(userMessage, state.pendingApproval?.flightNumber) === null &&
+    !isNewFlightReport(userMessage)
+  ) {
+    return { handled: false, updatedState: state };
+  }
+
+  const { action, flightNumber, delayMinutes } = applyFnolMessage(state, userMessage);
+
+  // PNR-phase outcomes (only returned while confirming a PNR with a PNR answer).
+  if (action === 'pnr_missing') {
+    return {
+      handled: true,
+      updatedState: state,
+      response: `I still need the PNR (booking confirmation number) on your reservation to verify this claim — could you share that?`,
+    };
+  }
+  if (action === 'pnr_retry') {
+    return {
+      handled: true,
+      updatedState: state,
+      response: `No data found for that PNR for flight ${flightNumber}. Could you please double check the PNR or confirmation number and try again?`,
+    };
+  }
+  if (action === 'pnr_deflect') {
+    return {
+      handled: true,
+      updatedState: state,
+      response: `I wasn't able to verify that PNR against our records for flight ${flightNumber}. Please contact TII directly at [1-800-243-3174](tel:+18002433174) (weekdays 8:00 AM – 6:00 PM ET) so a specialist can complete this manually.`,
+    };
+  }
+  if (action === 'approve') {
+    return {
+      handled: true,
+      updatedState: state,
+      response: buildApprovalMessage(flightNumber!, delayMinutes ?? TRIP_DELAY_MIN_MINUTES),
+    };
+  }
+  if (action === 'pnr_orphan') {
+    // A PNR was given but we have no confirmed-delayed flight to attach it to.
+    // Ask which flight it's for — never look the PNR up as a flight number, and
+    // never echo the reference back.
+    return {
+      handled: true,
+      updatedState: state,
+      response: `Thanks — it looks like that's your booking reference. Which flight is it for? If you share the flight number, I can look it up and check the delay.`,
+    };
+  }
 
   if (action === 'validate' && flightNumber) {
     // Only run the lookup when THIS message actually names a flight number. The
@@ -162,18 +234,21 @@ export async function handleFnolTurn(
   }
 
   // Same flight already claimed this session: respond with a scripted message
-  // (handled, no model call) so it is never re-approved. Only fire when THIS
-  // message actually names a flight number — otherwise the 'duplicate' came
-  // from a flight still carried in state (e.g. a post-approval follow-up like
-  // "how long until I get paid"), so defer and let the model answer.
+  // (handled, no model call) so it is never re-approved. Defer to the model
+  // ONLY for a non-trigger follow-up that names no flight number (e.g. a
+  // post-approval "how long until I get paid") — there the 'duplicate' came
+  // from a flight still carried in state, not a genuine re-file, so let the
+  // model answer. A fresh trigger (opening) IS a re-file attempt even when it
+  // doesn't repeat the number ("my flight was delayed" again after approval),
+  // so show the scripted duplicate reply rather than starting over.
   if (action === 'duplicate' && flightNumber) {
-    if (extractFlightNumber(userMessage) === null) {
+    if (!opening && extractFlightNumber(userMessage) === null) {
       return { handled: false, updatedState: state };
     }
     return {
       handled: true,
       updatedState: state,
-      response: `Your Trip Delay claim for flight ${flightNumber} is already on file and being processed — there's no need to file it again. If you haven't received your payout via virtual debit card yet, you can reach us at [1-800-243-3174](tel:+18002433174).`,
+      response: `Your Trip Delay claim for flight ${flightNumber} is already on file and being processed — there's no need to file it again. If you have a different flight that was also delayed, please share that flight number and I can check it for you.`,
     };
   }
 

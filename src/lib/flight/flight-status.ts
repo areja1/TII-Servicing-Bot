@@ -90,6 +90,8 @@ export async function checkFlightStatus(
     const prefix = ident.match(/^[A-Z]+/)?.[0] ?? "";
     const identField = prefix.length >= 3 ? "flight_icao" : "flight_iata";
 
+    // No flight_date: the free tier can't reliably resolve historical/future
+    // dates, so we query by ident alone and take the most recent match.
     const url =
       `${AVIATIONSTACK_FLIGHTS_URL}?access_key=${encodeURIComponent(accessKey)}` +
       `&${identField}=${encodeURIComponent(ident)}`;
